@@ -15,6 +15,11 @@
 const W = 800, H = 600;
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform) || /Mac/.test(navigator.userAgent);
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function ri(a,b) { return Math.floor(Math.random()*(b-a+1))+a; }
+function rf(a,b) { return Math.random()*(b-a)+a; }
 
 // ── Input ──────────────────────────────────────────────────────────────────────
 const keys = {};
@@ -34,6 +39,11 @@ let muted = false;
 function playSound(name) {
   if (muted) return;
   const s = audioCache[name].cloneNode();
+  s.play().catch(()=>{});
+}
+function playSoundAt(name, vol) {
+  const s = audioCache[name].cloneNode();
+  s.volume = vol;
   s.play().catch(()=>{});
 }
 
@@ -264,12 +274,13 @@ class Checkpoint {
 }
 
 class Enemy {
-  constructor(x,y,left,right,speed=1.5) {
+  constructor(x,y,left,right,speed=1.5,ttl=0) {
     this.x=x; this.y=y; this.w=28; this.h=24;
-    this.left=left; this.right=right; this.vx=speed; this.alive=true;
+    this.left=left; this.right=right; this.vx=speed; this.alive=true; this.ttl=ttl;
   }
   move() {
     if (!this.alive) return;
+    if (this.ttl > 0) { this.ttl--; if (this.ttl===0) { this.alive=false; return; } }
     this.x += this.vx;
     if (this.x < this.left) { this.x=this.left; this.vx=Math.abs(this.vx); }
     else if (this.x+this.w > this.right) { this.x=this.right-this.w; this.vx=-Math.abs(this.vx); }
@@ -323,6 +334,22 @@ let platforms=[], spikes=[], swings=[], coins=[], signs=[], goals=[];
 let checkpoints=[], enemies=[], trollZones=[], labels=[], liquids=[], jumppads=[], decor=[];
 let overlayLines=[], overlayTimer=0, overlayNext='';
 let toastText='', idleFrames=0, idleTarget=0, idleReveal=false;
+let crashActive=false, crashTimer=0, crashBar=0, crashBarTick=ri(18,45), crashBarStep=rf(0.04,0.14);
+
+// ── Glitch state ───────────────────────────────────────────────────────────────
+let glitchCd=ri(400,800), glitchDur=0, glitchType='';
+let mgCamActive=false, mgCamCd=ri(120,300);
+let mgRedCd=ri(200,500),  mgRedDur=0;
+let mgFsndCd=ri(300,600);
+let mgPhideCd=ri(400,800), mgPhideDur=0, mgPhideIdx=-1;
+let mgFspikeCd=ri(500,900), mgFspikePos=null;
+let mgTdistCd=ri(150,400),  mgTdistDur=0, mgTdistOff=[0,0];
+let mgCpflkCd=ri(200,500),  mgCpflkDur=0;
+let mgJlagCd=ri(200,400);
+let mgStrCd=ri(180,450),   mgStrDur=0;
+let mgVdipCd=ri(350,700),  mgVdipDur=0;
+let mgCshiftCd=ri(100,300), mgCshiftDur=0, mgCshiftIdx=-1;
+let pendingLag=0;
 
 const SCENE_ORDER = ['tutorial_1','tutorial_2','tutorial_3','tutorial_4','level_1a','level_2','level_3','level_4','level_5'];
 const SCENE_TITLES = {
@@ -336,6 +363,8 @@ function showOverlay(lines,duration,next) {
 
 function loadScene(name) {
   scene=name; toastText=''; idleFrames=0; idleTarget=0; idleReveal=false;
+  crashActive=false; crashTimer=0; crashBar=0;
+  crashBarTick=ri(18,45); crashBarStep=rf(0.04,0.14);
   platforms=[]; spikes=[]; swings=[]; coins=[]; signs=[]; goals=[];
   checkpoints=[]; enemies=[]; trollZones=[]; labels=[]; liquids=[]; jumppads=[]; decor=[];
   const scenes = {tutorial_1:_tutorial1, tutorial_2:_tutorial2, tutorial_3:_tutorial3,
@@ -459,11 +488,12 @@ function _level2() {
   coins.push(new Coin(460,470)); coins.push(new Coin(940,450));
   coins.push(new Coin(1420,470)); coins.push(new Coin(1900,450));
   function enemySwarm() {
-    for (const [fx,fl,fr] of [[580,560,820],[640,560,820],[740,560,820],
-        [1060,1040,1300],[1140,1040,1300],[1220,1040,1300],
-        [1540,1520,1780],[1620,1520,1780],[1700,1520,1780],
-        [2020,2000,2180],[2080,2000,2180],[2140,2000,2180]])
-      enemies.push(new Enemy(fx,536,fl,fr,2.0));
+    for (const [fx,fl,fr] of [
+      [580,560,820],[620,560,820],[660,560,820],[720,560,820],[780,560,820],
+      [1060,1040,1300],[1100,1040,1300],[1160,1040,1300],[1220,1040,1300],[1280,1040,1300],
+      [1540,1520,1780],[1580,1520,1780],[1640,1520,1780],[1700,1520,1780],[1760,1520,1780],
+      [2020,2000,2180],[2060,2000,2180],[2100,2000,2180],[2140,2000,2180],[2170,2000,2180]
+    ]) enemies.push(new Enemy(fx,536,fl,fr,2.0));
   }
   checkpoints.push(new Checkpoint(700,520,enemySwarm,true));
   checkpoints.push(new Checkpoint(1180,520,enemySwarm,true));
@@ -499,8 +529,7 @@ function _level4() {
   platforms.push(new Platform(0,560,WORLD_W,40,FC));
   platforms.push(new Platform(900,200,500,360,FC));
   for (let x=280;x<900;x+=20) spikes.push(new Spike(x,540));
-  idleTarget=180;
-  goals.push(new Goal(120,508));
+  idleTarget=300;
   labels.push(new Label(60,500,'No way through.',[200,200,210]));
 }
 
@@ -535,11 +564,12 @@ loadScene('tutorial_1');
 
 // ── Game loop ──────────────────────────────────────────────────────────────────
 function tick() {
+  pendingLag = 0;
+
   // Mute toggle
   if (keys['KeyM'] && !keys['_mPrev']) {
     muted = !muted;
-    const vol = muted ? 0 : 1;
-    Object.values(audioCache).forEach(a => a.volume = vol);
+    Object.values(audioCache).forEach(a => a.volume = muted ? 0 : 1);
   }
   keys['_mPrev'] = keys['KeyM'];
 
@@ -552,7 +582,6 @@ function tick() {
     for (const e of enemies) e.move();
 
     if (swings.some(s => s.check(player))) { playSound('die'); player.reset(); }
-
     for (const sp of spikes) {
       if (sp.check(player)) { playSound('die'); player.reset(); break; }
     }
@@ -566,15 +595,109 @@ function tick() {
     }
 
     if (idleTarget > 0 && !idleReveal) {
-      const moving = keys['ArrowLeft']||keys['ArrowRight']||keys['KeyA']||keys['KeyD']||keys['ArrowUp']||keys['KeyW']||keys['Space'];
+      const moving = keys['ArrowLeft']||keys['ArrowRight']||keys['KeyA']||keys['KeyD']
+                   ||keys['ArrowUp']||keys['KeyW']||keys['Space'];
       if (!moving && player.onGround) {
         idleFrames++;
-        if (idleFrames >= idleTarget) { idleReveal=true; toastText='Stillness reveals the path.'; }
+        if (idleFrames >= idleTarget) { idleReveal=true; crashActive=true; }
       } else { idleFrames=0; }
     }
 
-    for (const c of coins) { if (c.check(player)) playSound('coin'); }
+    if (crashActive) {
+      crashTimer++;
+      if (crashTimer > 55 && crashBar < 1) {
+        crashBarTick--;
+        if (crashBarTick <= 0) {
+          crashBar = Math.min(1, crashBar + crashBarStep);
+          crashBarTick = ri(12, 60);
+          crashBarStep = rf(0.03, 0.16);
+        }
+        if (crashBar >= 1) {
+          crashActive = false;
+          playSound('win');
+          const idx = SCENE_ORDER.indexOf(scene);
+          if (idx+1 < SCENE_ORDER.length) {
+            const nxt = SCENE_ORDER[idx+1];
+            showOverlay([SCENE_TITLES[nxt]], 90, nxt);
+          } else {
+            showOverlay(['You win.'], 180, 'tutorial_1');
+          }
+        }
+      }
+    }
 
+    // ── Glitch updates (real levels only) ─────────────────────────────────────
+    if (!scene.startsWith('tutorial')) {
+      if (glitchDur > 0) glitchDur--;
+      else if (glitchCd > 0) glitchCd--;
+      else {
+        glitchType = ['shake','shake','color','lag'][ri(0,3)];
+        glitchDur = ri(3,8); glitchCd = ri(350,750);
+      }
+
+      mgCamCd--;
+      mgCamActive = mgCamCd <= 0;
+      if (mgCamCd <= 0) mgCamCd = ri(120,300);
+
+      mgRedCd--;
+      if (mgRedCd <= 0) { mgRedCd=ri(200,500); mgRedDur=1; }
+      else if (mgRedDur>0) mgRedDur--;
+
+      mgFsndCd--;
+      if (mgFsndCd <= 0) { mgFsndCd=ri(300,600); playSoundAt('die',0.06); }
+
+      mgPhideCd--;
+      if (mgPhideCd <= 0) {
+        mgPhideCd=ri(400,800); mgPhideDur=2;
+        mgPhideIdx = platforms.length ? ri(0,platforms.length-1) : -1;
+      } else if (mgPhideDur>0) mgPhideDur--;
+
+      if (mgFspikePos) mgFspikePos=null;
+      mgFspikeCd--;
+      if (mgFspikeCd <= 0) {
+        mgFspikeCd=ri(500,900);
+        mgFspikePos=[player.x+ri(-120,120), player.y+ri(-60,60)];
+      }
+
+      mgTdistCd--;
+      if (mgTdistCd <= 0) {
+        mgTdistCd=ri(150,400); mgTdistDur=ri(1,3);
+        mgTdistOff=[ri(-4,4), ri(-3,3)];
+      } else if (mgTdistDur>0) mgTdistDur--;
+
+      mgCpflkCd--;
+      if (mgCpflkCd <= 0) { mgCpflkCd=ri(200,500); mgCpflkDur=1; }
+      else if (mgCpflkDur>0) mgCpflkDur--;
+
+      mgJlagCd--;
+      if (mgJlagCd <= 0) {
+        mgJlagCd=ri(200,400);
+        if (player.yVel < 0) pendingLag=ri(18,35);
+      }
+
+      mgStrCd--;
+      if (mgStrCd <= 0) { mgStrCd=ri(180,450); mgStrDur=1; }
+      else if (mgStrDur>0) mgStrDur--;
+
+      mgVdipCd--;
+      if (mgVdipCd <= 0) {
+        mgVdipCd=ri(350,700); mgVdipDur=ri(8,18);
+        if (!muted) Object.values(audioCache).forEach(a=>a.volume=0.12);
+      } else if (mgVdipDur>0) {
+        mgVdipDur--;
+        if (mgVdipDur===0 && !muted) Object.values(audioCache).forEach(a=>a.volume=1);
+      }
+
+      mgCshiftCd--;
+      if (mgCshiftCd <= 0) {
+        mgCshiftCd=ri(100,300); mgCshiftDur=2;
+        mgCshiftIdx = coins.length ? ri(0,coins.length-1) : -1;
+      } else if (mgCshiftDur>0) mgCshiftDur--;
+    } else {
+      mgCamActive=false;
+    }
+
+    for (const c of coins) { if (c.check(player)) playSound('coin'); }
     for (const cp of checkpoints) {
       if (cp.check(player)) { spawnX=cp.x-14; spawnY=cp.y-4; }
     }
@@ -587,39 +710,180 @@ function tick() {
         playSound('win');
         const idx = SCENE_ORDER.indexOf(scene);
         if (idx+1 < SCENE_ORDER.length) {
-          const nxt = SCENE_ORDER[idx+1];
-          showOverlay([SCENE_TITLES[nxt]],90,nxt);
+          showOverlay([SCENE_TITLES[SCENE_ORDER[idx+1]]],90,SCENE_ORDER[idx+1]);
         } else {
-          showOverlay(['You win!'],180,'tutorial_1');
+          showOverlay(['You win.'],180,'tutorial_1');
         }
         break;
       }
     }
   }
 
-  // ── Draw ────────────────────────────────────────────────────────────────────
+  // ── Draw ──────────────────────────────────────────────────────────────────────
   ctx.fillStyle = rgb(10,20,50);
   ctx.fillRect(0,0,W,H);
 
-  const camX = Math.max(0, Math.min(player.x - W/2, WORLD_W - W));
-  const camY = Math.max(0, Math.min(player.y - H/2, WORLD_H - H));
+  let camX = Math.max(0, Math.min(player.x - W/2, WORLD_W - W));
+  let camY = Math.max(0, Math.min(player.y - H/2, WORLD_H - H));
 
-  for (const p of platforms) p.draw(camX,camY);
+  if (!scene.startsWith('tutorial')) {
+    if (glitchDur>0 && glitchType==='shake') { camX+=ri(-7,7); camY+=ri(-5,5); }
+    if (glitchDur>0 && glitchType==='lag')   { pendingLag=ri(30,55); glitchDur=0; }
+    if (mgCamActive) { camX+=[- 3,-2,2,3][ri(0,3)]; camY+=[-2,-1,1,2][ri(0,3)]; }
+  }
+
+  // Platforms (with hide glitch)
+  for (let i=0;i<platforms.length;i++) {
+    if (i===mgPhideIdx && mgPhideDur>0) continue;
+    platforms[i].draw(camX,camY);
+  }
   for (const d of decor)     d.draw(camX,camY);
   for (const lq of liquids)  lq.draw(camX,camY);
   for (const jp of jumppads) jp.draw(camX,camY);
   for (const sp of spikes)   sp.draw(camX,camY);
-  for (const c of coins)     c.draw(camX,camY);
-  for (const cp of checkpoints) cp.draw(camX,camY);
-  for (const sg of signs)    sg.draw(camX,camY);
-  for (const lb of labels)   lb.draw(camX,camY);
-  for (const en of enemies)  en.draw(camX,camY);
-  for (const sw of swings)   sw.draw(camX,camY);
-  for (const g of goals) {
-    if (scene==='level_4' && idleTarget>0 && !idleReveal) continue;
-    g.draw(camX,camY);
+
+  // Coins (with shift glitch)
+  for (let i=0;i<coins.length;i++) {
+    if (i===mgCshiftIdx && mgCshiftDur>0) {
+      coins[i].x+=1; coins[i].draw(camX,camY); coins[i].x-=1;
+    } else { coins[i].draw(camX,camY); }
   }
-  player.draw(camX,camY);
+
+  // Checkpoints (with flicker glitch)
+  for (const cp of checkpoints) {
+    if (mgCpflkDur>0 && cp.active) {
+      cp.active=false; cp.draw(camX,camY); cp.active=true;
+    } else { cp.draw(camX,camY); }
+  }
+
+  for (const g of goals)  g.draw(camX,camY);
+  for (const sg of signs) sg.draw(camX,camY);
+
+  // Labels (with distort glitch)
+  for (const lb of labels) {
+    const ox = mgTdistDur>0 ? mgTdistOff[0] : 0;
+    const oy = mgTdistDur>0 ? mgTdistOff[1] : 0;
+    lb.draw(camX-ox, camY-oy);
+  }
+
+  for (const en of enemies) en.draw(camX,camY);
+  for (const sw of swings)  sw.draw(camX,camY);
+
+  // Player (with stretch glitch)
+  if (mgStrDur>0) {
+    const ow=player.w, oh=player.h;
+    player.w = ow+[-4,4,6][ri(0,2)];
+    player.h = oh+[-3,3,5][ri(0,2)];
+    player.draw(camX,camY);
+    player.w=ow; player.h=oh;
+  } else { player.draw(camX,camY); }
+
+  // Fake spike (1-frame phantom)
+  if (mgFspikePos) {
+    const fsx=mgFspikePos[0]-camX, fsy=mgFspikePos[1]-camY;
+    fillPoly([[fsx+10,fsy],[fsx+20,fsy+20],[fsx,fsy+20]], rgb(220,50,50));
+  }
+
+  // Red flash
+  if (mgRedDur>0) {
+    ctx.globalAlpha=80/255; ctx.fillStyle=rgb(220,30,30);
+    ctx.fillRect(0,0,W,H); ctx.globalAlpha=1;
+  }
+
+  // Color glitch overlay
+  if (!scene.startsWith('tutorial') && glitchDur>0 && glitchType==='color') {
+    ctx.globalAlpha=35/255;
+    ctx.fillStyle=rgb(ri(0,255),ri(0,100),ri(0,255));
+    ctx.fillRect(0,0,W,H); ctx.globalAlpha=1;
+  }
+
+  // ── Crash dialog ──────────────────────────────────────────────────────────────
+  if (crashActive) {
+    const t = crashTimer;
+    if (t < 55) {
+      for (let i=0; i<ri(2,5); i++) {
+        const ly=ri(0,H), lh=ri(2,5);
+        ctx.globalAlpha=ri(80,160)/255;
+        ctx.fillStyle=rgb(ri(100,255),ri(0,80),ri(100,255));
+        ctx.fillRect(0,ly,W,lh);
+      }
+      ctx.globalAlpha=1;
+    } else {
+      const fade = Math.min(210,(t-55)*7)/255;
+      ctx.globalAlpha=fade;
+      ctx.fillStyle = IS_MAC ? rgb(210,210,215) : rgb(185,185,185);
+      ctx.fillRect(0,0,W,H);
+      ctx.globalAlpha=1;
+
+      if (t > 65) {
+        const dlgW=380, dlgH=175;
+        const dlgX=W/2-dlgW/2, dlgY=H/2-dlgH/2;
+        const barW=dlgW-40, barX=dlgX+20;
+        const barFilled=Math.floor(barW*crashBar);
+
+        if (IS_MAC) {
+          fillRRect(dlgX,dlgY,dlgW,dlgH,rgb(240,240,240),12);
+          strokeRRect(dlgX,dlgY,dlgW,dlgH,rgb(180,180,180),1,12);
+          // traffic lights
+          fillCircle(dlgX+18,dlgY+16,7,rgb(220,80,70));
+          fillCircle(dlgX+40,dlgY+16,7,rgb(230,185,60));
+          fillCircle(dlgX+62,dlgY+16,7,rgb(100,200,80));
+          // title
+          ctx.fillStyle=rgb(40,40,40); ctx.font='bold 14px Arial'; ctx.textAlign='center';
+          ctx.fillText('Platformer', W/2, dlgY+22);
+          drawLine(dlgX,dlgY+28,dlgX+dlgW,dlgY+28,rgb(200,200,200));
+          ctx.font='15px Arial';
+          ctx.fillStyle=rgb(30,30,30);
+          ctx.fillText('Platformer is not responding.', W/2, dlgY+52);
+          ctx.fillStyle=rgb(90,90,90);
+          ctx.fillText('Restarting...', W/2, dlgY+72);
+          ctx.textAlign='left';
+          // progress bar
+          const barY=dlgY+86;
+          fillRRect(barX,barY,barW,14,rgb(210,210,210),7);
+          if (barFilled>0) fillRRect(barX,barY,barFilled,14,rgb(50,140,240),7);
+          strokeRRect(barX,barY,barW,14,rgb(160,160,160),1,7);
+          ctx.fillStyle=rgb(100,100,100); ctx.font='14px Arial'; ctx.textAlign='center';
+          ctx.fillText(Math.floor(crashBar*100)+'%', W/2, barY+30);
+          ctx.textAlign='left';
+          // greyed-out buttons
+          for (const [bx,btxt] of [[dlgX+50,'Force Quit'],[dlgX+210,'Wait']]) {
+            fillRRect(bx,dlgY+145,120,22,rgb(220,220,220),5);
+            strokeRRect(bx,dlgY+145,120,22,rgb(180,180,180),1,5);
+            ctx.fillStyle=rgb(150,150,150); ctx.font='14px Arial'; ctx.textAlign='center';
+            ctx.fillText(btxt, bx+60, dlgY+161); ctx.textAlign='left';
+          }
+        } else {
+          // Windows style
+          fillRRect(dlgX,dlgY,dlgW,dlgH,rgb(236,233,216));
+          fillRRect(dlgX,dlgY,dlgW,24,rgb(0,0,128));
+          strokeRRect(dlgX,dlgY,dlgW,dlgH,rgb(100,100,100),2);
+          fillRRect(dlgX+dlgW-20,dlgY+4,14,14,rgb(0,0,128));
+          ctx.fillStyle='white'; ctx.font='15px Arial';
+          ctx.fillText('✕',dlgX+dlgW-18,dlgY+17);
+          ctx.fillText('Platformer.exe',dlgX+8,dlgY+18);
+          ctx.fillStyle=rgb(0,0,0);
+          ctx.fillText('Platformer.exe has stopped working.',dlgX+16,dlgY+48);
+          ctx.fillStyle=rgb(60,60,60);
+          ctx.fillText('Windows is restarting Platformer...',dlgX+16,dlgY+70);
+          const barY=dlgY+86;
+          fillRRect(barX,barY,barW,16,rgb(200,200,200));
+          strokeRRect(barX,barY,barW,16,rgb(100,100,100),1);
+          if (barFilled>0) fillRRect(barX,barY,barFilled,16,rgb(6,176,37));
+          ctx.fillStyle=rgb(60,60,60); ctx.font='14px Arial'; ctx.textAlign='center';
+          ctx.fillText(Math.floor(crashBar*100)+'%', W/2, barY+34);
+          ctx.textAlign='left';
+          // Cancel button
+          const ctw=ctx.measureText('Cancel').width;
+          const cbx=dlgX+dlgW-ctw-26;
+          fillRRect(cbx-6,dlgY+148,ctw+12,20,rgb(212,208,200));
+          strokeRRect(cbx-6,dlgY+148,ctw+12,20,rgb(100,100,100),1);
+          ctx.fillStyle=rgb(0,0,0);
+          ctx.fillText('Cancel',cbx,dlgY+162);
+        }
+      }
+    }
+  }
 
   // Toast
   if (toastText) {
@@ -632,8 +896,7 @@ function tick() {
   // Overlay
   if (overlayTimer > 0) {
     const alpha = Math.min(1, (220-overlayTimer)*8/255);
-    ctx.globalAlpha = alpha;
-    ctx.font = 'bold 26px Arial';
+    ctx.globalAlpha = alpha; ctx.font = 'bold 26px Arial';
     for (let i=0;i<overlayLines.length;i++) {
       ctx.fillStyle = rgb(255,255,200);
       const tw = ctx.measureText(overlayLines[i]).width;
@@ -647,11 +910,14 @@ function tick() {
   ctx.fillText(muted?'[M] unmute':'[M] mute', 8, 22);
   ctx.globalAlpha=1;
 
-  requestAnimationFrame(tick);
+  if (pendingLag > 0) {
+    setTimeout(tick, pendingLag);
+  } else {
+    requestAnimationFrame(tick);
+  }
 }
 
 requestAnimationFrame(tick);
 </script>
 </body>
 </html>
-
